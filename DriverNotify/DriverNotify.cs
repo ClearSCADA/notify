@@ -1,4 +1,9 @@
 // Driver code for the Geo SCADA Notify demonstration
+
+// This feature enables the user to acknowledge alarms in Twilio
+// and the result of the acknowledge are fed back to the user.
+#define FEATURE_ALARM_ACK
+
 using System;
 using System.Collections.Generic;
 using System.Text;
@@ -10,6 +15,11 @@ using System.Security.Cryptography.X509Certificates;
 using System.Diagnostics;
 using System.Net;
 using System.Web;
+
+#if FEATURE_ALARM_ACK
+// If including alarm acknowledge capability - requires a Reference to ClearScada.Client.dll
+using ClearScada.Client;
+#endif
 
 namespace DriverNotify
 {
@@ -97,10 +107,19 @@ namespace DriverNotify
 		}
 	}
 
+	// The scanner has a dictionary of successful and failed acknowledgements
+	public class CookieStatus
+	{
+		public bool Status;
+		public DateTime UpdateTime;
+	}
+
 	public class DrvCSScanner : DriverScanner<NotifyScanner>
 	{
+		// Create a list of successful and failed acknowledgements
+		Dictionary<long, CookieStatus> CookieStatusList = new Dictionary<long, CookieStatus>();
 
-
+		// Driver overridden methods
 		public override void OnReadConfiguration()
 		{
 			base.OnReadConfiguration();
@@ -134,11 +153,30 @@ namespace DriverNotify
 				// This will tell us what events to log for success/fail of messages
 				// And it can advise us of alarm acknowledgements to process
 				((DrvNotifyChannel)this.Channel).LogAndEvent("Poll the Redirector");
-				// ToDo
 				using (WebClient client = new WebClient())
 				{
 					string requestaddress = WebServerAddress() + "/NotifyRequest/";
 					string requestparams = "?type=" + WebUtility.UrlEncode("STATUS");
+
+#if FEATURE_ALARM_ACK
+					// We add to the parameters the information within the AlarmStatusList - the info of failed and successful acknowledgements
+					// We add each alarm cookie to the request, but just delete ones which are old
+					int paramIndex = 1;
+					foreach( long Cookie in CookieStatusList.Keys)
+					{
+						// We will hold on to these for 100 seconds, then remove them (this time could be a configurable parameter).
+						if ( DateTime.Compare( CookieStatusList[Cookie].UpdateTime.Add(TimeSpan.FromSeconds(100)), DateTime.UtcNow) > 0)
+						{
+							// Add to request
+							requestparams += "&acookie" + paramIndex.ToString() + "=" + Cookie.ToString() + "&astatus" + paramIndex.ToString() + "=" + (CookieStatusList[Cookie].Status ? "1" : "0");
+						}
+						else
+						{
+							CookieStatusList.Remove(Cookie);
+						}
+					}
+#endif
+					((DrvNotifyChannel)this.Channel).LogAndEvent("Sending poll with data: " + requestparams);
 					try
 					{
 						string response = client.DownloadString(requestaddress + requestparams);
@@ -154,7 +192,7 @@ namespace DriverNotify
 						}
 						else
 						{
-							// Success - clear alarm if present
+							// Success - clear scanner alarm if present
 							App.SendReceiveObject(this.DBScanner.Id, OPCProperty.SendRecClearScannerAlarm, "");
 
 							// And process the received data
@@ -204,8 +242,8 @@ namespace DriverNotify
 			Console.WriteLine("phone:" + Phone);
 			string Message = responseParams["message"] ?? "";
 			Console.WriteLine("message:" + Message);
-			string Cookie = responseParams["cookie"] ?? "";
-			Console.WriteLine("cookie:" + Cookie);
+			string AlarmCookie = responseParams["cookie"] ?? "";
+			Console.WriteLine("cookie:" + AlarmCookie);
 
 			// Check parameter messagetype
 			switch (responseParams["type"] ?? "")
@@ -213,12 +251,111 @@ namespace DriverNotify
 				case "ERRORMESSAGE":
 					App.SendReceiveObject(this.DBScanner.Id, OPCProperty.SendRecLogEventText, "Notify Error: " + Message + ", Phone: " + Phone);
 					break;
-				// TODO
-				// Further types, e.g. request to acknowledge an alarm
+#if FEATURE_ALARM_ACK
+				case "ACKALARM":
+					string UserId = responseParams["userid"] ?? "";
+					string PIN = responseParams["pin"] ?? "";
+					long AlarmCookieNum = 0;
+					long.TryParse(AlarmCookie, out AlarmCookieNum);
+					if (AlarmCookieNum == 0)
+					{
+						App.SendReceiveObject(this.DBScanner.Id, OPCProperty.SendRecLogEventText, "Alarm Acknowledge Error: Invalid cookie. User: " + UserId + ", Phone: " + Phone);
+						break;
+					}
+					if ( TryAlarmAck(UserId, PIN, AlarmCookieNum, Phone) )
+					{
+						App.SendReceiveObject(this.DBScanner.Id, OPCProperty.SendRecLogEventText, "Alarm Acknowledged. Phone: " + Phone);
+					}
+					else
+					{
+						App.SendReceiveObject(this.DBScanner.Id, OPCProperty.SendRecLogEventText, "Alarm Acknowledge Error: " + UserId + ", Phone: " + Phone + ", Cookie: " + AlarmCookie);
+						// Arrived here - so hopefully the alarm was acknowledged OK
+						// Bundle the alarm cookie and current time into a list for sending back to the server in a poll - the only way it will get to hear about it
+						// Add to a list of successful and failed acknowledgements
+						CookieStatus ThisCookieStatus = new CookieStatus();
+						ThisCookieStatus.Status = true;
+						ThisCookieStatus.UpdateTime = DateTime.UtcNow;
+						CookieStatusList.Add(AlarmCookieNum, ThisCookieStatus);
+					}
+					break;
+#endif
+				// Further types
 				default:
 					break;
 			}
 		}
+
+#if FEATURE_ALARM_ACK
+		// Alarm acknowledgement
+		private bool TryAlarmAck( string UserId, string PIN, long Cookie, string Phone)
+		{
+			// Log on to the .Net Client API with these details
+			// This requires a Reference from the project to this dll
+			ClearScada.Client.Simple.Connection connection;
+			var node = new ClearScada.Client.ServerNode(ClearScada.Client.ConnectionType.Standard, "127.0.0.1", 5481);
+			connection = new ClearScada.Client.Simple.Connection("Notify");
+			try
+			{
+				connection.Connect(node);
+			}
+			catch (CommunicationsException)
+			{
+				((DrvNotifyChannel)this.Channel).LogAndEvent("Ack request - Unable to communicate with ClearSCADA server.");
+				return false;
+			}
+			if (!connection.IsConnected)
+			{
+				return false;
+			}
+			using (var spassword = new System.Security.SecureString())
+			{
+				foreach (var c in PIN)
+				{
+					spassword.AppendChar(c);
+				}
+				try
+				{
+					connection.LogOn(UserId, spassword);
+				}
+				catch (AccessDeniedException)
+				{
+					((DrvNotifyChannel)this.Channel).LogAndEvent("Ack request - Access denied, incorrect user Id or PIN.");
+					return false;
+				}
+				catch (PasswordExpiredException)
+				{
+					((DrvNotifyChannel)this.Channel).LogAndEvent("Ack request - credentials expired.");
+					return false;
+				}
+			}
+			// Get root object
+			ClearScada.Client.Simple.DBObject root = null;
+			try
+			{
+				root = connection.GetObject("$Root");
+			}
+			catch (Exception e)
+			{
+				((DrvNotifyChannel)this.Channel).LogAndEvent("Ack request - Cannot get root object. " + e.Message);
+				return false;
+			}
+			object[] parameters = new object[2];
+			parameters[0] = Cookie;
+			parameters[1] = "By Phone";
+
+			// Try acknowledging alarm
+			try
+			{
+				root.InvokeMethod("AcceptAlarmByCookie", parameters);
+			}
+			catch (Exception e)
+			{
+				((DrvNotifyChannel)this.Channel).LogAndEvent("Ack request - Cannot acknowledge. " + e.Message);
+				return false;
+			}
+			return true;
+		}
+#endif
 
 		public override void OnExecuteAction(DriverTransaction Transaction)
 		{

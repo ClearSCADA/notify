@@ -1,4 +1,9 @@
 ﻿// Web service code for the Redirector web service
+
+// This feature enables the user to acknowledge alarms in Twilio
+// and the result of the acknowledge are fed back to the user.
+#define FEATURE_ALARM_ACK
+
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -43,6 +48,7 @@ namespace Redirector
 
 		// A list consisting of status responses to be sent back to the server when it asks
 		private static List<string> StatusResponses = new List<string>();
+		private static Dictionary<string, string> CookieStatusList = new Dictionary<string, string>();
 
 		static void Main(string[] args)
 		{
@@ -66,6 +72,15 @@ namespace Redirector
 			wst.Stop();
 		}
 
+		// This server communicates with the driver at the endpoint /NotifyRequest/ and:
+		// a) Gets alarm/messages for outgoing notification and forwards them to Twilio
+		//			parameters: type = VOICE or SMS
+		//								key is the API key for Twilio
+		//								phone, message, cookie are for alarm notifications
+		// b) Gets status data/requests from the driver and buffers ack requests and returns any Twilio statuses
+		//						type =  STATUS (to pass Twilio results back)
+		//							If the Geo SCADA server wants to advise Twilio the ack status, then
+		//								acookie1 and astatus1, then 2,3 etc.
 		public static string DriverSendResponse(HttpListenerRequest request)
 		{
 			Console.WriteLine("Driver Request parameters: ");
@@ -132,7 +147,28 @@ namespace Redirector
 			else
 			{
 				// This is a status request - send back information received from Twilio
-				// We send back a simple array of JSON strings containing the status or alarm ack requests
+
+#if FEATURE_ALARM_ACK
+				// If we support alarm acknowledgement, then we also receive in the request a list of alarm cookies and ack status for each
+				// e.g. &acookie1=1234&astatus1=1
+				// Read these into a list so we can respond with them to Twilio in TwilioSendResponse
+				// We clear the list each time - they expire on the Geo SCADA server driver
+				CookieStatusList.Clear();
+				int paramIndex = 1;
+				do
+				{
+					string ACookie = request.QueryString["acookie" + paramIndex.ToString()] ?? "";
+					string AStatus = request.QueryString["astatus" + paramIndex.ToString()] ?? "";
+					if (ACookie == "" || AStatus == "")
+					{
+						break;
+					}
+					CookieStatusList.Add(ACookie, AStatus);
+					paramIndex++;
+				} while (paramIndex != 100); // Maximum
+#endif
+
+				// We send back a simple array of JSON strings containing the status or alarm ack requests from Twilio
 				// These all have the cookie and the message text attached so they can be matched to the original request
 				string WebResponse = "";
 				foreach (string s in StatusResponses)
@@ -143,10 +179,33 @@ namespace Redirector
 			}
 		}
 
+		// We use this server endpoint to receive status and acknowledge data from Twilio
+		// Typical uses - for Twilio to respond with messages such as no response to phone call
+		// /TwilioRequest/ with parameters:
+		//		type = ERRORMESSAGE, phone, message
+		//		type = ACKALARM, phone, cookie, userid, pin
+		//		type = ACKCHECK (#if FEATURE_ALARM_ACK)
 		public static string TwilioSendResponse(HttpListenerRequest request)
 		{
 			// Note - if the port/address of this server is left open to requesters other than Twilio, then anything can be received here
 			// So we length-limit the response, and the driver must properly validate this string data on receipt.
+
+#if FEATURE_ALARM_ACK
+			// Twilio may ask if an alarm has been acknowledged, we should find that info and respond, if passed to us
+			string requestType = request.QueryString["type"] ?? "";
+			Console.WriteLine("type:" + requestType);
+			if (requestType == "ACKCHECK")
+			{
+				string cookie = request.QueryString["cookie"] ?? "";
+				if (CookieStatusList.ContainsKey( cookie))
+				{
+					// Return parameter to Twilio - success (1) or failure (0) to acknowledge
+					return ("ackresponse=" + CookieStatusList[cookie]); 
+				}
+				// No response available yet - return 2.
+				return ("ackresponse=2");
+			}
+#endif
 
 			// 'Reserialise' the query string
 			string SerializedQueryString = "";
@@ -162,12 +221,12 @@ namespace Redirector
 			}
 			Console.WriteLine("Buffering Twilio Response:" + SerializedQueryString);
 
-
 			// When receiving data, we queue it up and send back to the driver when it next polls us
 			// We can't directly contact the driver, as for security architecture reasons we don't want to expose it as a server
+			// So here we just save the incoming responses in a list.
 			StatusResponses.Add(SerializedQueryString);
 
-			// Ack to Twilio - it needs a valid response otherwise errors are raised
+			// Simple ack to Twilio - it needs a valid response otherwise errors are raised
 			return string.Format("<HTML><BODY>TwilioRequest<br>{0}</BODY></HTML>", DateTime.Now);
 		}
 	}

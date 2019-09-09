@@ -78,6 +78,9 @@
     <CodeAnalysisRuleSet>AllRules.ruleset</CodeAnalysisRuleSet>
   </PropertyGroup>
   <ItemGroup>
+    <Reference Include="ClearScada.Client">
+      <HintPath>..\..\ClearSCADA\Binaries\X64\Release\ClearScada.Client.dll</HintPath>
+    </Reference>
     <Reference Include="ControlMicrosystems.ClearSCADA.DDK">
       <HintPath>..\..\ClearSCADA\Binaries\X64\Release\ControlMicrosystems.ClearSCADA.DDK.dll</HintPath>
     </Reference>

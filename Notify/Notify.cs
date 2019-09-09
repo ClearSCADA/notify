@@ -1,4 +1,9 @@
 // Database dll/extension for the Geo SCADA alarm notification demonstration
+
+// This feature enables the user to acknowledge alarms in Twilio
+// and the result of the acknowledge are fed back to the user.
+#define FEATURE_ALARM_ACK
+
 using System;
 using System.Collections.Generic;
 using System.Text;
@@ -255,6 +260,7 @@ namespace Notify
 			DriverAction(OPCProperty.DriverActionNotifyMessage, ArgObject, "SMS notify message: " + Message);
 		}
 
+#if FEATURE_ALARM_ACK
 		[Method("Voice Notify Alarm", "Send alarm text to redirector service and request acknowledge.", OPCProperty.Base + 35)]
 		public void NotifyAlarmVoice( string Message,
 											    string UserVoicemailNumber,
@@ -269,7 +275,7 @@ namespace Notify
 
 			DriverAction(OPCProperty.DriverActionNotifyMessage, ArgObject, "Voice notify alarm: " + Message);
 		}
-
+#endif
 		public override void OnReceive(uint Type, object Data, ref object Reply)
         {
             // Clear scanner alarm
