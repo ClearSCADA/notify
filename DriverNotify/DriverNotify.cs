@@ -4,6 +4,7 @@
 // and the result of the acknowledge are fed back to the user.
 #define FEATURE_ALARM_ACK
 
+
 using System;
 using System.Collections.Generic;
 using System.Text;
@@ -168,7 +169,9 @@ namespace DriverNotify
 						if ( DateTime.Compare( CookieStatusList[Cookie].UpdateTime.Add(TimeSpan.FromSeconds(100)), DateTime.UtcNow) > 0)
 						{
 							// Add to request
-							requestparams += "&acookie" + paramIndex.ToString() + "=" + Cookie.ToString() + "&astatus" + paramIndex.ToString() + "=" + (CookieStatusList[Cookie].Status ? "1" : "0");
+							string alarmackdata = "&acookie" + paramIndex.ToString() + "=" + Cookie.ToString() + "&astatus" + paramIndex.ToString() + "=" + (CookieStatusList[Cookie].Status ? "1" : "0");
+							requestparams += alarmackdata;
+							((DrvNotifyChannel)this.Channel).LogAndEvent("Return alarm ack status: " + alarmackdata);
 						}
 						else
 						{
@@ -176,9 +179,10 @@ namespace DriverNotify
 						}
 					}
 #endif
-					((DrvNotifyChannel)this.Channel).LogAndEvent("Sending poll with data: " + requestparams);
+					((DrvNotifyChannel)this.Channel).LogAndEvent("Send STATUS poll with data: " + requestparams);
 					try
 					{
+						// Send/receive to the Redirector
 						string response = client.DownloadString(requestaddress + requestparams);
 						((DrvNotifyChannel)this.Channel).LogAndEvent("Received data: " + response.Length.ToString());
 
@@ -186,7 +190,7 @@ namespace DriverNotify
 						// If the Redirector reports an error then raise a scanner alarm
 						if (response.StartsWith("ERROR"))
 						{
-							((DrvNotifyChannel)this.Channel).LogAndEvent(response);
+							((DrvNotifyChannel)this.Channel).LogAndEvent("Received ERROR response from Redirector: " + response);
 
 							App.SendReceiveObject(this.DBScanner.Id, OPCProperty.SendRecRaiseScannerAlarm, "Poll error from Redirector" + response);
 						}
@@ -194,6 +198,7 @@ namespace DriverNotify
 						{
 							// Success - clear scanner alarm if present
 							App.SendReceiveObject(this.DBScanner.Id, OPCProperty.SendRecClearScannerAlarm, "");
+							((DrvNotifyChannel)this.Channel).LogAndEvent("Received good response from Redirector." );
 
 							// And process the received data
 							// Unpack the request strings - one new line per response
@@ -203,6 +208,7 @@ namespace DriverNotify
 								// If not empty
 								if ((responseLine ?? "").Trim() != "")
 								{
+									((DrvNotifyChannel)this.Channel).LogAndEvent("Received this response from Redirector: " + responseLine);
 									ProcessResponse(responseLine);
 								}
 							}
@@ -213,8 +219,8 @@ namespace DriverNotify
 						// Why this failed (e.g. 404)
 						((DrvNotifyChannel)this.Channel).LogAndEvent("Failed to poll Redirector: " + e.Message );
 
-						// Driver should fail and raise alarm
-						App.SendReceiveObject(this.DBScanner.Id, OPCProperty.SendRecRaiseScannerAlarm, e.Message);
+						// Driver should fail and raise alarm if this occurs too many times
+						//App.SendReceiveObject(this.DBScanner.Id, OPCProperty.SendRecRaiseScannerAlarm, e.Message);
 					}
 				}
 			}
@@ -229,7 +235,8 @@ namespace DriverNotify
 			// Split response into & separated key/value pairs
 
 			string[] paramArray = urlencodedResponse.Split('&');
-			foreach( string param in paramArray)
+			((DrvNotifyChannel)this.Channel).LogAndEvent("Response has parameters: " + paramArray.Length.ToString());
+			foreach ( string param in paramArray)
 			{
 				string[] keyvalue = param.Split('=');
 				if (keyvalue.Length == 2)
@@ -239,14 +246,19 @@ namespace DriverNotify
 			}
 			// Read common parameters
 			string Phone = responseParams["phone"] ?? "";
-			Console.WriteLine("phone:" + Phone);
+			((DrvNotifyChannel)this.Channel).LogAndEvent("phone:" + Phone);
+
 			string Message = responseParams["message"] ?? "";
-			Console.WriteLine("message:" + Message);
+			((DrvNotifyChannel)this.Channel).LogAndEvent("message:" + Message);
+
 			string AlarmCookie = responseParams["cookie"] ?? "";
-			Console.WriteLine("cookie:" + AlarmCookie);
+			((DrvNotifyChannel)this.Channel).LogAndEvent("cookie:" + AlarmCookie);
+
+			string responseType = responseParams["type"] ?? "";
+			((DrvNotifyChannel)this.Channel).LogAndEvent("type:" + responseType);
 
 			// Check parameter messagetype
-			switch (responseParams["type"] ?? "")
+			switch (responseType)
 			{
 				case "ERRORMESSAGE":
 					App.SendReceiveObject(this.DBScanner.Id, OPCProperty.SendRecLogEventText, "Notify Error: " + Message + ", Phone: " + Phone);
@@ -254,29 +266,40 @@ namespace DriverNotify
 #if FEATURE_ALARM_ACK
 				case "ACKALARM":
 					string UserId = responseParams["userid"] ?? "";
+					((DrvNotifyChannel)this.Channel).LogAndEvent("userid:" + UserId);
+
 					string PIN = responseParams["pin"] ?? "";
+					((DrvNotifyChannel)this.Channel).LogAndEvent("pin:" + PIN); // Remove this when implementing.
+
+					// To return the status of the ack.
+					CookieStatus ThisCookieStatus = new CookieStatus();
+
 					long AlarmCookieNum = 0;
 					long.TryParse(AlarmCookie, out AlarmCookieNum);
 					if (AlarmCookieNum == 0)
 					{
+						((DrvNotifyChannel)this.Channel).LogAndEvent("Invalid cookie");
 						App.SendReceiveObject(this.DBScanner.Id, OPCProperty.SendRecLogEventText, "Alarm Acknowledge Error: Invalid cookie. User: " + UserId + ", Phone: " + Phone);
 						break;
 					}
 					if ( TryAlarmAck(UserId, PIN, AlarmCookieNum, Phone) )
 					{
+						((DrvNotifyChannel)this.Channel).LogAndEvent("Good acknowledge");
 						App.SendReceiveObject(this.DBScanner.Id, OPCProperty.SendRecLogEventText, "Alarm Acknowledged. Phone: " + Phone);
+						ThisCookieStatus.Status = true;
 					}
 					else
 					{
+						((DrvNotifyChannel)this.Channel).LogAndEvent("Failed acknowledge");
 						App.SendReceiveObject(this.DBScanner.Id, OPCProperty.SendRecLogEventText, "Alarm Acknowledge Error: " + UserId + ", Phone: " + Phone + ", Cookie: " + AlarmCookie);
-						// Arrived here - so hopefully the alarm was acknowledged OK
-						// Bundle the alarm cookie and current time into a list for sending back to the server in a poll - the only way it will get to hear about it
-						// Add to a list of successful and failed acknowledgements
-						CookieStatus ThisCookieStatus = new CookieStatus();
-						ThisCookieStatus.Status = true;
-						ThisCookieStatus.UpdateTime = DateTime.UtcNow;
-						CookieStatusList.Add(AlarmCookieNum, ThisCookieStatus);
+						ThisCookieStatus.Status = false;
 					}
+					// Arrived here - so hopefully the alarm was acknowledged OK
+					// Bundle the alarm cookie and current time into a list for sending back to the server in a poll - the only way it will get to hear about it
+					// Add to a list of successful and failed acknowledgements
+					ThisCookieStatus.UpdateTime = DateTime.UtcNow;
+					CookieStatusList.Add(AlarmCookieNum, ThisCookieStatus);
+
 					break;
 #endif
 				// Further types
@@ -293,18 +316,22 @@ namespace DriverNotify
 			// This requires a Reference from the project to this dll
 			ClearScada.Client.Simple.Connection connection;
 			var node = new ClearScada.Client.ServerNode(ClearScada.Client.ConnectionType.Standard, "127.0.0.1", 5481);
+			((DrvNotifyChannel)this.Channel).LogAndEvent("Acknowledge - connection created.");
+
 			connection = new ClearScada.Client.Simple.Connection("Notify");
 			try
 			{
+				((DrvNotifyChannel)this.Channel).LogAndEvent("Acknowledge - connecting.");
 				connection.Connect(node);
 			}
 			catch (CommunicationsException)
 			{
-				((DrvNotifyChannel)this.Channel).LogAndEvent("Ack request - Unable to communicate with ClearSCADA server.");
+				((DrvNotifyChannel)this.Channel).LogAndEvent("Ack request - Unable to log in to ClearSCADA server using UserId and PIN.");
 				return false;
 			}
 			if (!connection.IsConnected)
 			{
+				((DrvNotifyChannel)this.Channel).LogAndEvent("Acknowledge - failed connection.");
 				return false;
 			}
 			using (var spassword = new System.Security.SecureString())
@@ -315,6 +342,7 @@ namespace DriverNotify
 				}
 				try
 				{
+					((DrvNotifyChannel)this.Channel).LogAndEvent("Acknowledge - logging in.");
 					connection.LogOn(UserId, spassword);
 				}
 				catch (AccessDeniedException)
@@ -332,6 +360,7 @@ namespace DriverNotify
 			ClearScada.Client.Simple.DBObject root = null;
 			try
 			{
+				((DrvNotifyChannel)this.Channel).LogAndEvent("Acknowledge - get database object.");
 				root = connection.GetObject("$Root");
 			}
 			catch (Exception e)
@@ -346,6 +375,7 @@ namespace DriverNotify
 			// Try acknowledging alarm
 			try
 			{
+				((DrvNotifyChannel)this.Channel).LogAndEvent("Acknowledge - accepting by cookie.");
 				root.InvokeMethod("AcceptAlarmByCookie", parameters);
 			}
 			catch (Exception e)
@@ -368,9 +398,9 @@ namespace DriverNotify
 						string Message = (string) Transaction.get_Args(0);
 						string PhoneNumber = (string)Transaction.get_Args(1);
 						string MessageType = (string)Transaction.get_Args(2);
-						string Cookie = (string)Transaction.get_Args(3);
+						string CookieStr = (string)Transaction.get_Args(3);
 
-						((DrvNotifyChannel)this.Channel).LogAndEvent("Notify Message to: " + PhoneNumber + " using " + MessageType + " cookie " + Cookie);
+						((DrvNotifyChannel)this.Channel).LogAndEvent("Notify Message to: " + PhoneNumber + " using " + MessageType + " cookie " + CookieStr);
 
 						using (WebClient client = new WebClient())
 						{
@@ -380,21 +410,27 @@ namespace DriverNotify
 													"&phone=" + WebUtility.UrlEncode( PhoneNumber) + 
 													"&message=" + WebUtility.UrlEncode( Message) +
 													"&type=" + WebUtility.UrlEncode( MessageType ) +
-													"&cookie=" + WebUtility.UrlEncode( Cookie);
+													"&cookie=" + WebUtility.UrlEncode( CookieStr);
 							try
 							{
 								string response = client.DownloadString(requestaddress + requestparams);
-								((DrvNotifyChannel)this.Channel).LogAndEvent("Received data: " + response.Length.ToString());
+								((DrvNotifyChannel)this.Channel).LogAndEvent("Received data - length: " + response.Length.ToString());
+
+								string partresponse = "";
+								if (response.Length < 100)
+									partresponse = response;
+								else
+									partresponse = response.Substring(0, 100);
 
 								// If the Redirector reports an error then raise a scanner alarm
 								if (response.StartsWith("ERROR"))
 								{
-									((DrvNotifyChannel)this.Channel).LogAndEvent(response.Substring(0, 100));
-
+									((DrvNotifyChannel)this.Channel).LogAndEvent("Received error." + partresponse);
 									App.SendReceiveObject(this.DBScanner.Id, OPCProperty.SendRecRaiseScannerAlarm, "Error from Redirector" + response.Substring(0,100));
 								}
 								else
 								{
+									((DrvNotifyChannel)this.Channel).LogAndEvent("Response OK");
 									// Success - clear alarm if present
 									App.SendReceiveObject(this.DBScanner.Id, OPCProperty.SendRecClearScannerAlarm, "");
 								}
@@ -412,6 +448,25 @@ namespace DriverNotify
 					this.CompleteTransaction(Transaction, 0, "Notify Message Send Successful.");
 					break;
 
+#if FEATURE_ALARM_ACK
+				case OPCProperty.DriverActionTestAlarmAck:
+
+					string UserId = (string)Transaction.get_Args(0);
+					string PIN = (string)Transaction.get_Args(1);
+					string CookieString = (string)Transaction.get_Args(2);
+					long AlarmCookie = long.Parse(CookieString);
+
+					if ( TryAlarmAck( UserId,  PIN,  AlarmCookie,  "no phone"))
+					{
+						((DrvNotifyChannel)this.Channel).LogAndEvent("Test acknowledge success.");
+					}
+					else
+					{
+						((DrvNotifyChannel)this.Channel).LogAndEvent("Test acknowledge fail.");
+					}
+					this.CompleteTransaction(Transaction, 0, "Test Acknowledgement Successful.");
+					break;
+#endif
 				default:
 					base.OnExecuteAction(Transaction);
 					break;

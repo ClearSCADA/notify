@@ -22,6 +22,7 @@ namespace Notify
 		public const UInt32 SendRecAckAlarm = OPCProperty.Base + 16;
 		// Actions
 		public const UInt32 DriverActionNotifyMessage = OPCProperty.Base + 88;
+		public const UInt32 DriverActionTestAlarmAck = OPCProperty.Base + 89;
 
 	}
 }

@@ -19,19 +19,19 @@ namespace Redirector
 	{
 		// These parameters are required by Twilio
 		// Account SID is used by Twilio to identify the account owner
-		private static string AccountSID = "ACc88cb4beb136cc7b1381fec21b1013fb";
+		private static string AccountSID = Properties.Settings.Default.AccountSID;
 
 		// The Account Authorization token is used for authentication
 		// It is viewable from the Twilio web interface, and configured on the Notifier object in the Geo SCADA Driver
-		// (We don't put the token in this program for security reasons).
+		// (We don't put the token in this program for security reasons - that comes from a configuration property of the driver scanner object).
 
 		// The Flow ID is used to identify the flow we want to run.
 		// You will need to replicate and/or customise the example flow in Twilio (see the ReadMe pdf linked with this code)
 		// This flow is a message sender with optional with acknowledgement from the user
-		private static string TwilioFlowId = "https://studio.twilio.com/v1/Flows/FWa3d1f18f518c70a76cd5a70bc9fcf1da/Executions";
+		private static string TwilioFlowId = Properties.Settings.Default.TwilioFlowId;
 
 		// This is a phone number used by Twilio to send messages. You will need to select and lease this number from your Twilio account
-		private static string FromNumber = "+447588722325";
+		private static string FromNumber = Properties.Settings.Default.FromNumber;
 
 		// These parameters are used to set up this web server
 		// This is the host name, and is used by the Driver for the connection. This address is configured in the channel
@@ -39,11 +39,11 @@ namespace Redirector
 		// It is not recommended to use *, please use the host name. 
 		// If you set up driver and Redirector on the same host (not recommended) you can use "localhost" but no Twilio responses will be possible.
 		// (See https://docs.microsoft.com/en-us/dotnet/api/system.net.httplistener?view=netframework-4.8)
-		private static string WebHostName = "*";
+		private static string WebHostName = Properties.Settings.Default.WebHostName;
 		// This is the port of the server
-		private static int WebPort = 8080;
+		private static int WebPort = Properties.Settings.Default.WebPort;
 		// This is the protocol - http. If you wish to use https then additional configuration will be needed, but this is recommended
-		private static string WebProtocol = "http";
+		private static string WebProtocol = Properties.Settings.Default.WebProtocol;
 
 
 		// A list consisting of status responses to be sent back to the server when it asks
@@ -83,11 +83,12 @@ namespace Redirector
 		//								acookie1 and astatus1, then 2,3 etc.
 		public static string DriverSendResponse(HttpListenerRequest request)
 		{
-			Console.WriteLine("Driver Request parameters: ");
+			Console.WriteLine("** DriverSendResponse at: " + DateTime.Now.ToShortTimeString());
+
 			string requestType = request.QueryString["type"] ?? "";
 			Console.WriteLine("type:" + requestType); // Type VOICE or SMS - or STATUS
 
-			// Check this is not a STATUS request
+			// Check this is not a regular STATUS request from the driver
 			if (requestType != "STATUS")
 			{
 				string AuthToken = request.QueryString["key"] ?? "";
@@ -125,13 +126,14 @@ namespace Redirector
 					client.Headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/75.0.3770.142 Safari/537.36";
 					try
 					{
+						Console.WriteLine("Send POST to Twilio");
 						// POST the request	
 						byte[] responsebytes = client.UploadValues(TwilioFlowId,
 																	"POST",
 																	reqparm);
 						string responsebody = Encoding.UTF8.GetString(responsebytes);
 
-						Console.WriteLine("Received data: " + responsebody.Length.ToString() + " bytes, " + Encoding.ASCII.GetString(responsebytes));
+						Console.WriteLine("Received data. Body: " + responsebody.Length.ToString() + " bytes, " + Encoding.ASCII.GetString(responsebytes));
 					}
 					catch (Exception e)
 					{
@@ -139,10 +141,13 @@ namespace Redirector
 						Console.WriteLine("Exception: " + e.Message + " ");
 						// Should cause failure/alarm of the channel by responding with error
 						// We don't send an error code back as our request itself was OK, we rely on the message content being interpreted.
+						Console.WriteLine("Return ERROR to driver");
 						return "ERROR " + e.Message;
 					}
 				}
-				return string.Format("<HTML><BODY>NotifyRequest<br>{0}</BODY></HTML>", DateTime.Now);
+				string response = string.Format("<HTML><BODY>NotifyRequest<br>{0}</BODY></HTML>", DateTime.Now);
+				Console.WriteLine("Return response: " + response);
+				return response;
 			}
 			else
 			{
@@ -161,10 +166,12 @@ namespace Redirector
 					string AStatus = request.QueryString["astatus" + paramIndex.ToString()] ?? "";
 					if (ACookie == "" || AStatus == "")
 					{
+						Console.WriteLine("No (more) cookie status to add.");
 						break;
 					}
 					CookieStatusList.Add(ACookie, AStatus);
 					paramIndex++;
+					Console.WriteLine("Adding acknowledgement status for cookie: " + ACookie + ", status: " + AStatus);
 				} while (paramIndex != 100); // Maximum
 #endif
 
@@ -173,8 +180,12 @@ namespace Redirector
 				string WebResponse = "";
 				foreach (string s in StatusResponses)
 				{
+					Console.WriteLine("Appending response to this request: " + s);
 					WebResponse += s + "\n";
 				}
+				// And clear so they are only sent once
+				StatusResponses.Clear();
+
 				return WebResponse;
 			}
 		}
@@ -189,24 +200,27 @@ namespace Redirector
 		{
 			// Note - if the port/address of this server is left open to requesters other than Twilio, then anything can be received here
 			// So we length-limit the response, and the driver must properly validate this string data on receipt.
-
+			Console.WriteLine("** TwilioSendResponse at: " + DateTime.Now.ToShortTimeString());
 #if FEATURE_ALARM_ACK
-			// Twilio may ask if an alarm has been acknowledged, we should find that info and respond, if passed to us
+			// Twilio may ask (after asking for an ack) if an alarm has been acknowledged, we should find that info and respond, if passed to us
 			string requestType = request.QueryString["type"] ?? "";
 			Console.WriteLine("type:" + requestType);
 			if (requestType == "ACKCHECK")
 			{
+				Console.WriteLine("Received ACKCHECK from Twilio.");
 				string cookie = request.QueryString["cookie"] ?? "";
 				if (CookieStatusList.ContainsKey( cookie))
 				{
+					Console.WriteLine("Sending result for cookie: " + cookie + ", = " + CookieStatusList[cookie]);
 					// Return parameter to Twilio - success (1) or failure (0) to acknowledge
 					return ("ackresponse=" + CookieStatusList[cookie]); 
 				}
 				// No response available yet - return 2.
+				Console.WriteLine("No result for cookie: " + cookie );
 				return ("ackresponse=2");
 			}
 #endif
-
+			// Twilio is asking for an alarm ack, bundle parameters and send to driver later when it requests
 			// 'Reserialise' the query string
 			string SerializedQueryString = "";
 			foreach( string Key in request.QueryString.AllKeys)
@@ -219,7 +233,7 @@ namespace Redirector
 				}
 				SerializedQueryString += WebUtility.UrlEncode(Key) + "=" + WebUtility.UrlEncode( Value) + "&";
 			}
-			Console.WriteLine("Buffering Twilio Response:" + SerializedQueryString);
+			Console.WriteLine("Buffering Twilio Response:" + SerializedQueryString); // Remove PIN user data when implementing
 
 			// When receiving data, we queue it up and send back to the driver when it next polls us
 			// We can't directly contact the driver, as for security architecture reasons we don't want to expose it as a server
@@ -227,7 +241,7 @@ namespace Redirector
 			StatusResponses.Add(SerializedQueryString);
 
 			// Simple ack to Twilio - it needs a valid response otherwise errors are raised
-			return string.Format("<HTML><BODY>TwilioRequest<br>{0}</BODY></HTML>", DateTime.Now);
+			return "body=nothing";
 		}
 	}
 }

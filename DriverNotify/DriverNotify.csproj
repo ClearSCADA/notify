@@ -78,11 +78,13 @@
     <CodeAnalysisRuleSet>AllRules.ruleset</CodeAnalysisRuleSet>
   </PropertyGroup>
   <ItemGroup>
-    <Reference Include="ClearScada.Client">
-      <HintPath>..\..\ClearSCADA\Binaries\X64\Release\ClearScada.Client.dll</HintPath>
+    <Reference Include="ClearScada.Client, Version=6.82.7094.1, Culture=neutral, PublicKeyToken=9e16b9dd55e2cd53, processorArchitecture=MSIL">
+      <SpecificVersion>False</SpecificVersion>
+      <HintPath>..\80.6993.1 Cloud MQTT\ClearScada.Client.dll</HintPath>
     </Reference>
-    <Reference Include="ControlMicrosystems.ClearSCADA.DDK">
-      <HintPath>..\..\ClearSCADA\Binaries\X64\Release\ControlMicrosystems.ClearSCADA.DDK.dll</HintPath>
+    <Reference Include="ControlMicrosystems.ClearSCADA.DDK, Version=6.82.7094.1, Culture=neutral, PublicKeyToken=9e16b9dd55e2cd53, processorArchitecture=AMD64">
+      <SpecificVersion>False</SpecificVersion>
+      <HintPath>..\80.6993.1 Cloud MQTT\ControlMicrosystems.ClearSCADA.DDK.dll</HintPath>
     </Reference>
     <Reference Include="Notify">
       <HintPath>..\Notify\bin\x64\Debug\Notify.dll</HintPath>
@@ -95,6 +97,11 @@
   <ItemGroup>
     <Compile Include="DriverNotify.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="Properties\Settings.Designer.cs">
+      <AutoGen>True</AutoGen>
+      <DesignTimeSharedInput>True</DesignTimeSharedInput>
+      <DependentUpon>Settings.settings</DependentUpon>
+    </Compile>
   </ItemGroup>
   <ItemGroup>
     <BootstrapperPackage Include="Microsoft.Net.Client.3.5">
@@ -115,6 +122,10 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="app.config" />
+    <None Include="Properties\Settings.settings">
+      <Generator>SettingsSingleFileGenerator</Generator>
+      <LastGenOutput>Settings.Designer.cs</LastGenOutput>
+    </None>
   </ItemGroup>
   <ItemGroup>
     <WCFMetadata Include="Service References\" />

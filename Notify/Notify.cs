@@ -232,7 +232,21 @@ namespace Notify
             base.OnValidateConfig(Errors);
         }
 
-		[Method("Voice Notify Message", "Send simple text message to redirector service.", OPCProperty.Base + 33)]
+		[Method("SMS Notify Message", "Send simple text message to redirector service.", OPCProperty.Base + 34)]
+		public void NotifyMessageSMS(string Message,
+												string UserVoicemailNumber)
+		{
+			object[] ArgObject = new Object[4];
+
+			ArgObject[0] = Message;
+			ArgObject[1] = UserVoicemailNumber;
+			ArgObject[2] = "SMS";
+			ArgObject[3] = "0"; // No alarm cookie for acknowledgement
+
+			DriverAction(OPCProperty.DriverActionNotifyMessage, ArgObject, "SMS notify message: " + Message);
+		}
+
+		[Method("Voice Notify Message", "Send simple voice message to redirector service.", OPCProperty.Base + 33)]
 		public void NotifyMessageVoice( string Message,
 											      string UserVoicemailNumber)
 		{
@@ -246,34 +260,34 @@ namespace Notify
 			DriverAction(OPCProperty.DriverActionNotifyMessage, ArgObject, "Voice notify message: " + Message);
 		}
 
-		[Method("SMS Notify Message", "Send simple text message to redirector service.", OPCProperty.Base + 34)]
-		public void NotifyMessageSMS( string Message,
-											    string UserVoicemailNumber)
-		{
-			object[] ArgObject = new Object[4];
-
-			ArgObject[0] = Message;
-			ArgObject[1] = UserVoicemailNumber;
-			ArgObject[2] = "SMS";
-			ArgObject[3] = "0"; // No alarm cookie for acknowledgement
-
-			DriverAction(OPCProperty.DriverActionNotifyMessage, ArgObject, "SMS notify message: " + Message);
-		}
-
 #if FEATURE_ALARM_ACK
-		[Method("Voice Notify Alarm", "Send alarm text to redirector service and request acknowledge.", OPCProperty.Base + 35)]
+		[Method("Voice Notify Alarm", "Send alarm as voice to redirector service and request acknowledge.", OPCProperty.Base + 35)]
 		public void NotifyAlarmVoice( string Message,
 											    string UserVoicemailNumber,
-											    long Cookie)
+											    string Cookie)
 		{
 			object[] ArgObject = new Object[4];
 
 			ArgObject[0] = Message;
 			ArgObject[1] = UserVoicemailNumber;
 			ArgObject[2] = "VOICE";
-			ArgObject[3] = Cookie.ToString(); // Allows alarm acknowledgement
+			ArgObject[3] = Cookie; // Allows alarm acknowledgement
 
 			DriverAction(OPCProperty.DriverActionNotifyMessage, ArgObject, "Voice notify alarm: " + Message);
+		}
+
+		[Method("Test Acknowledge Alarm", "Acknowledge alarm via user details.", OPCProperty.Base + 36)]
+		public void TestAlarmAck(string UserID,
+												string PIN,
+												string Cookie)
+		{
+			object[] ArgObject = new Object[3];
+
+			ArgObject[0] = UserID;
+			ArgObject[1] = PIN;
+			ArgObject[2] = Cookie;
+
+			DriverAction(OPCProperty.DriverActionTestAlarmAck, ArgObject, "Test alarm Ack: " + Cookie);
 		}
 #endif
 		public override void OnReceive(uint Type, object Data, ref object Reply)
