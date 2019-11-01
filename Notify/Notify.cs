@@ -213,7 +213,7 @@ namespace Notify
 		[ConfigField("ServiceType",
 						"Type of service used.",
 						6, 2, OPCProperty.Base + 17)]
-		[Enum(new String[] { "Twilio Voice", "Twilio SMS" })]
+		[Enum(new String[] { "Twilio Voice and SMS", "Microsoft Flow" })]
 		public Byte ServiceType = 0;
 
 		[Label("API Key", 7, 1)]
